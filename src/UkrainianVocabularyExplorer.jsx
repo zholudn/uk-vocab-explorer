@@ -6,13 +6,14 @@ const UkrainianVocabularyExplorer = () => {
   const [data, setData] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [storyFilter, setStoryFilter] = useState('');
-  const [wordFilter, setWordFilter] = useState('');
   const [uniqueStories, setUniqueStories] = useState([]);
+  const [storyStats, setStoryStats] = useState([]);
   const [selectedStory, setSelectedStory] = useState('');
+  const [wordFilter, setWordFilter] = useState('');
   const [showFirstAppearance, setShowFirstAppearance] = useState(false);
   const [sortBy, setSortBy] = useState('frequency');
   const [sortDirection, setSortDirection] = useState('desc');
+  const [storySort, setStorySort] = useState('name');
 
   useEffect(() => {
     const fetchData = async () => {
@@ -20,33 +21,36 @@ const UkrainianVocabularyExplorer = () => {
         const response = await fetch('/lemma_summary.csv');
         const text = await response.text();
 
-
         Papa.parse(text, {
           header: true,
           dynamicTyping: true,
           skipEmptyLines: true,
           complete: (results) => {
-            // Get the data
             const parsedData = results.data;
 
-            // Extract unique story IDs from column names
             const storyColumns = results.meta.fields
               .filter(col => col.startsWith('count_in_'))
               .map(col => col.replace('count_in_', ''));
 
-            // Sort stories by their numerical prefix if possible
             const sortedStories = storyColumns.sort((a, b) => {
-              // Extract numbers from the beginning of story names
               const numA = parseInt(a.match(/^(\d+)/)?.[1] || '999');
               const numB = parseInt(b.match(/^(\d+)/)?.[1] || '999');
               return numA - numB;
             });
 
+            // Compute word stats for each story
+            const stats = sortedStories.map(story => {
+              const storyColumn = `count_in_${story}`;
+              const totalWords = parsedData.reduce((sum, row) => sum + (row[storyColumn] || 0), 0);
+              const newWords = parsedData.filter(row => row.first_story === story).length;
+              return { story, totalWords, newWords };
+            });
+
             setData(parsedData);
-            setUniqueStories(sortedStories);
+            setStoryStats(stats);
+            setUniqueStories(stats.map(s => s.story));
             setLoading(false);
 
-            // Auto-select the first story if available
             if (sortedStories.length > 0) {
               setSelectedStory(sortedStories[0]);
             }
@@ -83,12 +87,27 @@ const UkrainianVocabularyExplorer = () => {
     }
   };
 
+  const handleStorySortChange = (e) => {
+    const sortKey = e.target.value;
+    setStorySort(sortKey);
+
+    let sortedStats;
+    if (sortKey === 'totalWords') {
+      sortedStats = _.orderBy(storyStats, ['totalWords'], ['desc']);
+    } else if (sortKey === 'newWords') {
+      sortedStats = _.orderBy(storyStats, ['newWords'], ['desc']);
+    } else {
+      sortedStats = _.orderBy(storyStats, ['story'], ['asc']);
+    }
+
+    setUniqueStories(sortedStats.map(s => s.story));
+  };
+
   const getFilteredData = () => {
     if (!data.length) return [];
 
     let filtered = data;
 
-    // Apply word filter
     if (wordFilter) {
       const lowercaseFilter = wordFilter.toLowerCase();
       filtered = filtered.filter(row =>
@@ -96,19 +115,15 @@ const UkrainianVocabularyExplorer = () => {
       );
     }
 
-    // Apply story filter
     if (selectedStory) {
       if (showFirstAppearance) {
-        // Show words that first appear in this story
         filtered = filtered.filter(row => row.first_story === selectedStory);
       } else {
-        // Show all words in this story
         const storyColumn = `count_in_${selectedStory}`;
         filtered = filtered.filter(row => row[storyColumn] > 0);
       }
     }
 
-    // Apply sorting
     if (sortBy === 'frequency' && selectedStory) {
       const storyColumn = `count_in_${selectedStory}`;
       filtered = _.orderBy(filtered, [storyColumn], [sortDirection]);
@@ -118,7 +133,7 @@ const UkrainianVocabularyExplorer = () => {
       filtered = _.orderBy(filtered, ['lemma'], [sortDirection]);
     }
 
-    return filtered.slice(0, 1000); // Limit to 1000 rows for performance
+    return filtered.slice(0, 1000);
   };
 
   if (loading) return <div className="p-4 text-center">Loading vocabulary data...</div>;
@@ -127,10 +142,10 @@ const UkrainianVocabularyExplorer = () => {
   const filteredData = getFilteredData();
 
   return (
-    <div className="p-4 max-w-4xl mx-auto">
+    <div className="p-4 max-w-5xl mx-auto">
       <h1 className="text-2xl font-bold mb-4">Ukrainian Vocabulary Explorer</h1>
 
-      <div className="mb-6 p-4 bg-blue-50 rounded-lg">
+      <div className="mb-6 p-4 bg-blue-50 rounded-lg space-y-4">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div>
             <label className="block mb-2 font-medium">Select a Story:</label>
@@ -140,11 +155,15 @@ const UkrainianVocabularyExplorer = () => {
               className="w-full p-2 border rounded"
             >
               <option value="">All Stories</option>
-              {uniqueStories.map(story => (
-                <option key={story} value={story}>
-                  {story}
-                </option>
-              ))}
+              {uniqueStories.map(story => {
+                const stats = storyStats.find(s => s.story === story);
+                const label = stats
+                  ? `${story} (${stats.totalWords} words, ${stats.newWords} new)`
+                  : story;
+                return (
+                  <option key={story} value={story}>{label}</option>
+                );
+              })}
             </select>
           </div>
 
@@ -160,7 +179,7 @@ const UkrainianVocabularyExplorer = () => {
           </div>
         </div>
 
-        <div className="mt-4 flex flex-wrap items-center gap-4">
+        <div className="flex flex-wrap items-center gap-4">
           <div>
             <label className="font-medium mr-2">Sort by:</label>
             <select
@@ -179,6 +198,19 @@ const UkrainianVocabularyExplorer = () => {
             </button>
           </div>
 
+          <div>
+            <label className="font-medium mr-2">Sort Stories by:</label>
+            <select
+              value={storySort}
+              onChange={handleStorySortChange}
+              className="p-2 border rounded"
+            >
+              <option value="name">Name</option>
+              <option value="totalWords">Total Words</option>
+              <option value="newWords">New Words</option>
+            </select>
+          </div>
+
           {selectedStory && (
             <div className="flex items-center">
               <input
@@ -188,7 +220,7 @@ const UkrainianVocabularyExplorer = () => {
                 onChange={handleToggleFirstAppearance}
                 className="mr-2"
               />
-              <label htmlFor="firstAppearance">Show only words first appearing in this story</label>
+              <label htmlFor="firstAppearance">Show only new words in this story</label>
             </div>
           )}
         </div>
@@ -196,15 +228,14 @@ const UkrainianVocabularyExplorer = () => {
 
       <div className="mb-4">
         <h2 className="text-xl font-semibold">
-          {selectedStory ?
-            (showFirstAppearance ?
-              `New words introduced in "${selectedStory}"` :
-              `All words in "${selectedStory}"`) :
-            'All vocabulary'}
+          {selectedStory
+            ? showFirstAppearance
+              ? `New words introduced in "${selectedStory}"`
+              : `All words in "${selectedStory}"`
+            : 'All vocabulary'}
         </h2>
         <p className="text-gray-600">
-          Showing {filteredData.length} {filteredData.length === 1000 ? '(limited to first 1000)' : ''}
-          out of {data.length} total words
+          Showing {filteredData.length} {filteredData.length === 1000 ? '(limited to 1000)' : ''} out of {data.length} total words
         </p>
       </div>
 
@@ -213,11 +244,13 @@ const UkrainianVocabularyExplorer = () => {
           <thead>
             <tr className="bg-gray-100">
               <th className="py-2 px-4 border">Word (Lemma)</th>
-              <th className="py-2 px-4 border">
+              <th className="py-2 px-4 border text-center">
                 {selectedStory ? 'Count in Story' : 'Total Count'}
               </th>
               <th className="py-2 px-4 border">First Appeared In</th>
-              <th className="py-2 px-4 border">Is New?</th>
+              {selectedStory && (
+                <th className="py-2 px-4 border text-center">Is New?</th>
+              )}
             </tr>
           </thead>
           <tbody>
@@ -230,20 +263,16 @@ const UkrainianVocabularyExplorer = () => {
                     <td className="py-2 px-4 border text-center">
                       {selectedStory ? row[`count_in_${selectedStory}`] : row.total_count}
                     </td>
-                    <td className="py-2 px-4 border text-sm">
-                      {row.first_story}
-                      {!isFirstAppearance && selectedStory &&
-                        <span className="text-xs text-gray-500 block">
-                          (ID: {row.first_story.match(/^(\d+)/)?.[1] || 'N/A'})
-                        </span>
-                      }
-                    </td>
-                    <td className="py-2 px-4 border text-center">
-                      {isFirstAppearance ?
-                        <span className="font-bold text-green-600">Yes</span> :
-                        <span className="text-red-600">No</span>
-                      }
-                    </td>
+                    <td className="py-2 px-4 border">{row.first_story}</td>
+                    {selectedStory && (
+                      <td className="py-2 px-4 border text-center">
+                        {isFirstAppearance ? (
+                          <span className="font-bold text-green-600">Yes</span>
+                        ) : (
+                          <span className="text-red-600">No</span>
+                        )}
+                      </td>
+                    )}
                   </tr>
                 );
               })
